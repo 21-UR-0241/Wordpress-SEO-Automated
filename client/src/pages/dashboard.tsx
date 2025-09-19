@@ -90,15 +90,6 @@ export default function Dashboard() {
               Monitor your WordPress sites and AI-powered SEO optimization
             </p>
           </div>
-          {/* <div className="mt-4 sm:mt-0 sm:ml-4">
-            <Button
-              variant="outline"
-              className="inline-flex items-center w-full sm:w-auto justify-center"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export Report
-            </Button>
-          </div> */}
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-6 sm:mb-8">
