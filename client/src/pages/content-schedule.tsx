@@ -1018,30 +1018,6 @@ export default function ContentSchedule() {
                         <span>Status: {viewingContent.status}</span>
                       </div>
                     </div>
-
-                    {/* SEO Keywords */}
-                    {/* {viewingContent.seoKeywords && viewingContent.seoKeywords.length > 0 && (
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-700 mb-2">SEO Keywords</h3>
-                        <div className="flex flex-wrap gap-2">
-                          {viewingContent.seoKeywords.map((keyword: string) => (
-                            <Badge key={keyword} variant="outline" className="text-xs">
-                              {keyword}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )} */}
-
-                    {/* Content Excerpt
-                    {viewingContent.contentExcerpt && (
-                      <div>
-                        <h3 className="text-sm font-medium text-gray-700 mb-2">Excerpt</h3>
-                        <p className="text-sm text-gray-600 bg-white p-3 rounded border">
-                          {viewingContent.contentExcerpt}
-                        </p>
-                      </div>
-                    )} */}
                   </div>
 
                   {/* Scrollable Content Body */}

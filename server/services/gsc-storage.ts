@@ -1,115 +1,6 @@
-
-
-// //server/services/gsc-storage.ts
-// import { Pool } from 'pg';
-
-// // Use your existing Neon database connection
-// const pool = new Pool({
-//   connectionString: process.env.DATABASE_URL,
-//   ssl: { rejectUnauthorized: false }
-// });
-
-// export const gscStorage = {
-//   async saveGscAccount(userId: string, account: any) {
-//     const query = `
-//       INSERT INTO gsc_accounts (id, user_id, email, name, picture, access_token, refresh_token, token_expiry, is_active)
-//       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-//       ON CONFLICT(id) DO UPDATE SET
-//         access_token = EXCLUDED.access_token,
-//         refresh_token = EXCLUDED.refresh_token,
-//         token_expiry = EXCLUDED.token_expiry,
-//         is_active = EXCLUDED.is_active,
-//         updated_at = NOW()
-//       RETURNING *
-//     `;
-    
-//     // Convert milliseconds to seconds for INTEGER column
-//     const tokenExpiryInSeconds = Math.floor(account.tokenExpiry / 1000);
-    
-//     const values = [
-//       account.id,
-//       userId,
-//       account.email,
-//       account.name,
-//       account.picture || null,
-//       account.accessToken,
-//       account.refreshToken,
-//       tokenExpiryInSeconds, // Use seconds instead of milliseconds
-//       true
-//     ];
-    
-//     const result = await pool.query(query, values);
-//     return account;
-//   },
-
-//   async getGscAccount(userId: string, accountId: string) {
-//     const query = 'SELECT * FROM gsc_accounts WHERE user_id = $1 AND id = $2';
-//     const result = await pool.query(query, [userId, accountId]);
-    
-//     if (result.rows.length === 0) return null;
-    
-//     const row = result.rows[0];
-//     return {
-//       id: row.id,
-//       email: row.email,
-//       name: row.name,
-//       picture: row.picture,
-//       accessToken: row.access_token,
-//       refreshToken: row.refresh_token,
-//       tokenExpiry: row.token_expiry * 1000, // Convert seconds back to milliseconds
-//       isActive: row.is_active
-//     };
-//   },
-
-//   async updateGscAccount(userId: string, accountId: string, updates: any) {
-//     const query = `
-//       UPDATE gsc_accounts 
-//       SET access_token = $1, token_expiry = $2, updated_at = NOW()
-//       WHERE user_id = $3 AND id = $4
-//       RETURNING *
-//     `;
-    
-//     // Convert milliseconds to seconds for INTEGER column
-//     const tokenExpiryInSeconds = Math.floor(updates.tokenExpiry / 1000);
-    
-//     await pool.query(query, [
-//       updates.accessToken,
-//       tokenExpiryInSeconds, // Use seconds instead of milliseconds
-//       userId,
-//       accountId
-//     ]);
-    
-//     return { success: true };
-//   },
-
-//   async getAllGscAccounts(userId: string) {
-//     const query = 'SELECT * FROM gsc_accounts WHERE user_id = $1 ORDER BY created_at DESC';
-//     const result = await pool.query(query, [userId]);
-    
-//     return result.rows.map(row => ({
-//       id: row.id,
-//       email: row.email,
-//       name: row.name,
-//       picture: row.picture,
-//       accessToken: row.access_token,
-//       refreshToken: row.refresh_token,
-//       tokenExpiry: row.token_expiry * 1000, // Convert seconds back to milliseconds
-//       isActive: row.is_active
-//     }));
-//   },
-
-//   async deleteGscAccount(userId: string, accountId: string) {
-//     const query = 'DELETE FROM gsc_accounts WHERE user_id = $1 AND id = $2';
-//     await pool.query(query, [userId, accountId]);
-//     return { success: true };
-//   }
-// };
-
-
-
-
-// server/services/gsc-storage.ts
+// server/services/gsc-storage.ts - COMPLETE VERSION WITH FIX
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 
 // Use your existing Neon database connection
 const pool = new Pool({
@@ -124,7 +15,7 @@ interface GscConfiguration {
 }
 
 interface GscAccount {
-  id: string;
+  id: string;  // This is the Google account ID (for compatibility)
   email: string;
   name: string;
   picture?: string;
@@ -167,19 +58,33 @@ export const gscStorage = {
     };
   },
 
-  // Account management - matches gsc_accounts table
+  // FIXED: Account management with explicit ID generation
   async saveGscAccount(userId: string, account: GscAccount) {
+    // Generate UUID explicitly to avoid null ID error
+    const dbId = randomUUID();
+    
     const query = `
       INSERT INTO gsc_accounts (
-        id, user_id, email, name, picture, 
-        access_token, refresh_token, token_expiry, is_active
+        id,  -- Explicitly include id
+        user_id, 
+        account_id, 
+        email, 
+        name, 
+        picture, 
+        access_token, 
+        refresh_token, 
+        token_expiry, 
+        is_active
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT(id) DO UPDATE SET
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT(user_id, account_id) DO UPDATE SET
         access_token = EXCLUDED.access_token,
         refresh_token = EXCLUDED.refresh_token,
         token_expiry = EXCLUDED.token_expiry,
         is_active = EXCLUDED.is_active,
+        email = EXCLUDED.email,
+        name = EXCLUDED.name,
+        picture = EXCLUDED.picture,
         updated_at = NOW()
       RETURNING *
     `;
@@ -188,8 +93,9 @@ export const gscStorage = {
     const tokenExpiryInSeconds = Math.floor(account.tokenExpiry / 1000);
     
     const values = [
-      account.id,
+      dbId,  // Generated UUID
       userId,
+      account.id,  // Google account ID goes in account_id column
       account.email,
       account.name,
       account.picture || null,
@@ -203,15 +109,16 @@ export const gscStorage = {
     return account;
   },
 
+  // Get account using account_id column
   async getGscAccount(userId: string, accountId: string): Promise<GscAccount | null> {
-    const query = 'SELECT * FROM gsc_accounts WHERE user_id = $1 AND id = $2';
+    const query = 'SELECT * FROM gsc_accounts WHERE user_id = $1 AND account_id = $2';
     const result = await pool.query(query, [userId, accountId]);
     
     if (result.rows.length === 0) return null;
     
     const row = result.rows[0];
     return {
-      id: row.id,
+      id: row.account_id,  // Return the Google account ID
       email: row.email,
       name: row.name,
       picture: row.picture,
@@ -222,16 +129,25 @@ export const gscStorage = {
     };
   },
 
+  // Get account with credentials using account_id column
   async getGscAccountWithCredentials(userId: string, accountId: string) {
     const query = `
       SELECT 
-        a.*,
+        a.id as db_id,
+        a.account_id,
+        a.email,
+        a.name,
+        a.picture,
+        a.access_token,
+        a.refresh_token,
+        a.token_expiry,
+        a.is_active,
         c.client_id,
         c.client_secret,
         c.redirect_uri
       FROM gsc_accounts a
       JOIN gsc_configurations c ON c.user_id = a.user_id
-      WHERE a.user_id = $1 AND a.id = $2
+      WHERE a.user_id = $1 AND a.account_id = $2
     `;
     const result = await pool.query(query, [userId, accountId]);
     
@@ -239,7 +155,8 @@ export const gscStorage = {
     
     const row = result.rows[0];
     return {
-      id: row.id,
+      id: row.account_id,  // Return the Google account ID for compatibility
+      accountId: row.account_id,
       email: row.email,
       name: row.name,
       picture: row.picture,
@@ -248,10 +165,12 @@ export const gscStorage = {
       tokenExpiry: row.token_expiry * 1000,
       isActive: row.is_active,
       clientId: row.client_id,
-      clientSecret: row.client_secret
+      clientSecret: row.client_secret,
+      redirectUri: row.redirect_uri
     };
   },
 
+  // Update account using account_id column
   async updateGscAccount(userId: string, accountId: string, updates: Partial<GscAccount>) {
     const fields: string[] = [];
     const values: any[] = [];
@@ -284,7 +203,7 @@ export const gscStorage = {
     const query = `
       UPDATE gsc_accounts 
       SET ${fields.join(', ')}, updated_at = NOW()
-      WHERE user_id = $${paramCount} AND id = $${paramCount + 1}
+      WHERE user_id = $${paramCount} AND account_id = $${paramCount + 1}
       RETURNING *
     `;
     
@@ -292,12 +211,13 @@ export const gscStorage = {
     return { success: true };
   },
 
+  // Get all accounts using account_id column
   async getAllGscAccounts(userId: string): Promise<GscAccount[]> {
     const query = 'SELECT * FROM gsc_accounts WHERE user_id = $1 ORDER BY created_at DESC';
     const result = await pool.query(query, [userId]);
     
     return result.rows.map(row => ({
-      id: row.id,
+      id: row.account_id,  // Return the Google account ID
       email: row.email,
       name: row.name,
       picture: row.picture,
@@ -308,20 +228,23 @@ export const gscStorage = {
     }));
   },
 
+  // Delete account using account_id column
   async deleteGscAccount(userId: string, accountId: string) {
-    const query = 'DELETE FROM gsc_accounts WHERE user_id = $1 AND id = $2';
+    const query = 'DELETE FROM gsc_accounts WHERE user_id = $1 AND account_id = $2';
     await pool.query(query, [userId, accountId]);
     return { success: true };
   },
 
-  // Properties management
+  // Properties management - uses account_id correctly
   async saveGscProperty(userId: string, accountId: string, property: any) {
+    const propertyId = randomUUID(); // Generate ID for property too
+    
     const query = `
       INSERT INTO gsc_properties (
-        user_id, account_id, site_url, permission_level, 
+        id, user_id, account_id, site_url, permission_level, 
         site_type, verified, last_synced
       )
-      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
       ON CONFLICT(site_url) DO UPDATE SET
         permission_level = EXCLUDED.permission_level,
         verified = EXCLUDED.verified,
@@ -331,6 +254,7 @@ export const gscStorage = {
     `;
     
     const values = [
+      propertyId,
       userId,
       accountId,
       property.siteUrl,
@@ -358,48 +282,56 @@ export const gscStorage = {
     return result.rows;
   },
 
-  // Quota management using gsc_quota_usage table
+  // Quota management - handles both old and new structure
   async getGscQuotaUsage(accountId: string) {
-    const today = new Date().toISOString().split('T')[0];
+    const quotaId = randomUUID(); // Generate ID if needed
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Use DATE type for date column
+    const todayDate = today.toISOString().split('T')[0];
     
     // First check if record exists for today
     let query = `
       SELECT count, limit_count 
       FROM gsc_quota_usage 
-      WHERE account_id = $1 AND date = $2
+      WHERE account_id = $1 AND date::date = $2::date
     `;
-    let result = await pool.query(query, [accountId, today]);
+    let result = await pool.query(query, [accountId, todayDate]);
     
     if (result.rows.length === 0) {
-      // Create record for today
+      // Create record for today with explicit ID
       query = `
-        INSERT INTO gsc_quota_usage (account_id, date, count, limit_count)
-        VALUES ($1, $2, 0, 200)
+        INSERT INTO gsc_quota_usage (id, account_id, date, count, limit_count)
+        VALUES ($1, $2, $3::date, 0, 200)
         RETURNING count, limit_count
       `;
-      result = await pool.query(query, [accountId, today]);
+      result = await pool.query(query, [quotaId, accountId, todayDate]);
     }
     
     return {
-      used: result.rows[0].count,
-      limit: result.rows[0].limit_count
+      used: result.rows[0].count || 0,
+      limit: result.rows[0].limit_count || 200
     };
   },
 
   async incrementGscQuotaUsage(accountId: string, url?: string) {
-    const today = new Date().toISOString().split('T')[0];
+    const quotaId = randomUUID();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayDate = today.toISOString().split('T')[0];
     
-    // Increment quota count
+    // Increment quota count with explicit ID
     const query = `
-      INSERT INTO gsc_quota_usage (account_id, date, count, limit_count)
-      VALUES ($1, $2, 1, 200)
+      INSERT INTO gsc_quota_usage (id, account_id, date, count, limit_count)
+      VALUES ($1, $2, $3::date, 1, 200)
       ON CONFLICT(account_id, date) DO UPDATE SET
         count = gsc_quota_usage.count + 1,
         updated_at = NOW()
       RETURNING count
     `;
     
-    const result = await pool.query(query, [accountId, today]);
+    const result = await pool.query(query, [quotaId, accountId, todayDate]);
     
     // Also track in indexing requests if URL provided
     if (url) {
@@ -411,6 +343,8 @@ export const gscStorage = {
 
   // Indexing requests tracking
   async trackIndexingRequest(accountId: string, url: string, status: string) {
+    const requestId = randomUUID(); // Generate ID for request
+    
     // Get property ID for this URL
     const propertyQuery = `
       SELECT id FROM gsc_properties 
@@ -427,8 +361,8 @@ export const gscStorage = {
     
     const propertyId = propertyResult.rows[0].id;
     
-    // Get user_id from account
-    const userQuery = 'SELECT user_id FROM gsc_accounts WHERE id = $1';
+    // Get user_id from account using account_id column
+    const userQuery = 'SELECT user_id FROM gsc_accounts WHERE account_id = $1 LIMIT 1';
     const userResult = await pool.query(userQuery, [accountId]);
     
     if (userResult.rows.length === 0) {
@@ -439,12 +373,12 @@ export const gscStorage = {
     
     const query = `
       INSERT INTO gsc_indexing_requests (
-        user_id, account_id, property_id, url, type, status, created_at
+        id, user_id, account_id, property_id, url, type, status, created_at
       )
-      VALUES ($1, $2, $3, $4, 'URL_UPDATED', $5, NOW())
+      VALUES ($1, $2, $3, $4, $5, 'URL_UPDATED', $6, NOW())
     `;
     
-    await pool.query(query, [userId, accountId, propertyId, url, status]);
+    await pool.query(query, [requestId, userId, accountId, propertyId, url, status]);
     return { success: true };
   },
 
@@ -452,14 +386,16 @@ export const gscStorage = {
   async savePerformanceData(propertyId: string, data: any[]) {
     const query = `
       INSERT INTO gsc_performance_data (
-        property_id, date, clicks, impressions, ctr, position
+        id, property_id, date, clicks, impressions, ctr, position
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT DO NOTHING
     `;
     
     for (const row of data) {
+      const perfId = randomUUID();
       await pool.query(query, [
+        perfId,
         propertyId,
         row.date,
         row.clicks,
@@ -474,17 +410,20 @@ export const gscStorage = {
 
   // URL Inspections
   async saveUrlInspection(propertyId: string, inspection: any) {
+    const inspectionId = randomUUID();
+    
     const query = `
       INSERT INTO gsc_url_inspections (
-        property_id, url, index_status, last_crawl_time,
+        id, property_id, url, index_status, last_crawl_time,
         page_fetch_state, google_canonical, user_canonical,
         mobile_usability, rich_results_status, full_result,
         inspected_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
     `;
     
     const values = [
+      inspectionId,
       propertyId,
       inspection.url,
       inspection.indexStatus,
@@ -503,18 +442,31 @@ export const gscStorage = {
 
   // Sitemaps
   async saveSitemap(propertyId: string, sitemapUrl: string) {
+    const sitemapId = randomUUID();
+    
     const query = `
-      INSERT INTO gsc_sitemaps (property_id, sitemap_url, status, last_submitted)
-      VALUES ($1, $2, 'submitted', NOW())
+      INSERT INTO gsc_sitemaps (id, property_id, sitemap_url, status, last_submitted)
+      VALUES ($1, $2, $3, 'submitted', NOW())
       ON CONFLICT DO NOTHING
     `;
     
-    await pool.query(query, [propertyId, sitemapUrl]);
+    await pool.query(query, [sitemapId, propertyId, sitemapUrl]);
     return { success: true };
+  },
+
+  // Helper method for debugging
+  async getAccountsByGoogleId(googleAccountId: string) {
+    const query = `
+      SELECT user_id, email, name 
+      FROM gsc_accounts 
+      WHERE account_id = $1
+    `;
+    const result = await pool.query(query, [googleAccountId]);
+    return result.rows;
   }
 };
 
-// No need for createGscTables since tables already exist
+// Table creation functions (if needed)
 export const createGscTables = async () => {
   console.log('GSC tables already exist in Neon database');
   return true;

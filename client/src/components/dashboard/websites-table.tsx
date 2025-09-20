@@ -136,18 +136,6 @@ export default function WebsitesTable() {
             Managed Websites
           </h3>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:space-x-2">
-            {/* <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
-                <SelectItem value="issues">Issues</SelectItem>
-              </SelectContent>
-            </Select> */}
-
             <Dialog open={isAddWebsiteOpen} onOpenChange={setIsAddWebsiteOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-primary-500 hover:bg-primary-600 text-white w-full sm:w-auto">

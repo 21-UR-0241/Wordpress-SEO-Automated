@@ -19,6 +19,7 @@ import { useEffect } from "react";
 interface PerformanceChartProps {
   stats?: any;
   isLoading?: boolean;
+  selectedWebsite?: string | null;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -38,56 +39,25 @@ const LINE_COLORS = [
 ];
 
 // ────────────────────────────────────────────────────────────
-// Helpers (LOCAL time bucketing + labeling)
+// Helpers (Use exact timestamp instead of hour bucketing)
 // ────────────────────────────────────────────────────────────
 
-/** Round a Date to the start of its hour in a specific TZ and return a stable key + numeric ts. */
-const getHourBucket = (input: string | number | Date, tz = TZ) => {
-  const d =
-    typeof input === "number" && input < 1e12 ? new Date(input * 1000) : new Date(input);
-  if (Number.isNaN(d.getTime())) return { key: "", ts: NaN };
-
-  // Build parts in TZ
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(d).map(p => [p.type, p.value]));
-  const y = parts.year;
-  const m = parts.month;
-  const day = parts.day;
-  const hour = parts.hour;
-
-  // Hour bucket key (YYYY-MM-DDTHH)
-  const key = `${y}-${m}-${day}T${hour}`;
-
-  // Create a timestamp representing local hour start.
-  // NOTE: This uses the browser's local zone to build the Date object;
-  // for strict Manila alignment regardless of client TZ, we compute via Date.UTC
-  // then offset using the reported TZ hours. For simplicity we parse to a Date first:
-  const ts = new Date(`${y}-${m}-${day}T${hour}:00:00`).getTime();
-
-  return { key, ts };
-};
-
-/** Format an hour bucket label like "Sep 18, 16:00" in TZ */
-const formatHourLabel = (ts: number, tz = TZ) =>
-  new Intl.DateTimeFormat("en-US", {
+/** Format timestamp label like "Sep 18, 16:00" in TZ */
+const formatTimeLabel = (dateStr: string | Date, tz = TZ) => {
+  const date = new Date(dateStr);
+  return new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(ts);
+  }).format(date);
+};
 
 // ────────────────────────────────────────────────────────────
 
-export default function PerformanceChart({ stats, isLoading }: PerformanceChartProps) {
+export default function PerformanceChart({ stats, isLoading, selectedWebsite }: PerformanceChartProps) {
   const queryClient = useQueryClient();
 
   // If external stats changed (e.g., a new analysis), invalidate to refresh.
@@ -103,31 +73,23 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ["seo-reports-chart-data", stats?.avgSeoScore],
+    queryKey: ["seo-reports-chart-data", stats?.avgSeoScore, selectedWebsite],
     queryFn: async () => {
       const websites = await api.getWebsites();
+      
+      // Filter websites based on selectedWebsite prop from dashboard
+      const filteredWebsites = selectedWebsite && selectedWebsite !== "all"
+        ? websites.filter((w: any) => w.id === selectedWebsite)
+        : websites;
 
-      // hourKey -> aggregated row for that hour across sites
-      const byHour = new Map<
-        string,
-        {
-          ts: number;              // numeric timestamp (hour start)
-          label: string;           // "Sep 18, 16:00"
-          metadata?: Record<
-            string,
-            {
-              score: number;
-              pageSpeedScore?: number;
-              issuesCount?: number;
-              criticalIssues?: number;
-              reportId?: string;
-              createdAt?: string;
-              isSynthetic?: boolean;
-            }
-          >;
-          // dynamic site score fields: row[siteName] = score
-        } & Record<string, any>
-      >();
+      // Store all data points with exact timestamps
+      const allDataPoints: Array<{
+        ts: number;
+        label: string;
+        reportId: string;
+        metadata?: Record<string, any>;
+        [key: string]: any;
+      }> = [];
 
       const websiteInfo: Array<{
         id: string;
@@ -140,8 +102,8 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
 
       let totalReports = 0;
 
-      for (let i = 0; i < websites.length; i++) {
-        const website = websites[i];
+      for (let i = 0; i < filteredWebsites.length; i++) {
+        const website = filteredWebsites[i];
 
         try {
           const reports = await api.getSeoReports(website.id);
@@ -149,29 +111,14 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
           if (reports && reports.length > 0) {
             totalReports += reports.length;
 
-            // Sort newest first just for "latestScore" derivation
+            // Sort by date to get chronological order
             const sortedReports = [...reports].sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+              (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
             );
 
-            const latestReport = sortedReports[0];
+            // Latest report is the last one chronologically
+            const latestReport = sortedReports[sortedReports.length - 1];
             let latestScore = latestReport?.score || 0;
-
-            // Optional: patch a synthetic "now" point if dashboard avg differs
-            let syntheticInserted = false;
-            if (stats?.avgSeoScore && Math.abs(stats.avgSeoScore - latestScore) > 0.1) {
-              const synthetic = {
-                id: "synthetic-latest",
-                score: stats.avgSeoScore,
-                createdAt: new Date().toISOString(),
-                pageSpeedScore: latestReport?.pageSpeedScore,
-                fixableIssuesCount: latestReport?.fixableIssuesCount || 0,
-                criticalIssuesCount: latestReport?.criticalIssuesCount || 0,
-              };
-              reports.push(synthetic);
-              latestScore = stats.avgSeoScore;
-              syntheticInserted = true;
-            }
 
             // Legend/info
             websiteInfo.push({
@@ -179,34 +126,38 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
               name: website.name,
               color: LINE_COLORS[i % LINE_COLORS.length],
               latestScore,
-              reportCount: reports.length - (syntheticInserted ? 1 : 0),
+              reportCount: reports.length,
             });
 
-            // Fill rows per hour (no day dedupe)
-            for (const report of reports) {
-              const { key: hourKey, ts } = getHourBucket(report.createdAt, TZ);
-              if (!hourKey) continue;
-
-              if (!byHour.has(hourKey)) {
-                byHour.set(hourKey, {
+            // Create a data point for each report with exact timestamp
+            for (const report of sortedReports) {
+              const ts = new Date(report.createdAt).getTime();
+              
+              // Find existing data point with same timestamp or create new one
+              let dataPoint = allDataPoints.find(dp => dp.ts === ts);
+              
+              if (!dataPoint) {
+                dataPoint = {
                   ts,
-                  label: formatHourLabel(ts, TZ),
-                });
+                  label: formatTimeLabel(report.createdAt, TZ),
+                  reportId: report.id,
+                };
+                allDataPoints.push(dataPoint);
               }
-              const row = byHour.get(hourKey)!;
-
+              
+              // Add the score for this website
               const score = report.score || 0;
-              row[website.name] = score;
-
-              if (!row.metadata) row.metadata = {};
-              row.metadata[website.name] = {
+              dataPoint[website.name] = score;
+              
+              // Add metadata
+              if (!dataPoint.metadata) dataPoint.metadata = {};
+              dataPoint.metadata[website.name] = {
                 score,
                 pageSpeedScore: report.pageSpeedScore,
                 issuesCount: report.fixableIssuesCount || 0,
                 criticalIssues: report.criticalIssuesCount || 0,
                 reportId: report.id,
                 createdAt: report.createdAt,
-                isSynthetic: report.id === "synthetic-latest",
               };
             }
           } else {
@@ -230,16 +181,16 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
         }
       }
 
-      // To a sorted array by ts
-      const rows = Array.from(byHour.values()).sort((a, b) => a.ts - b.ts);
+      // Sort all data points by timestamp
+      const sortedData = allDataPoints.sort((a, b) => a.ts - b.ts);
 
-      // Keep last N hours (e.g., ~10 days = 240 hours); adjust as needed
-      const recent = rows.slice(-240);
+      // Keep recent data points (last 100 or so)
+      const recentData = sortedData.slice(-100);
 
       return {
-        data: recent,
+        data: recentData,
         websites: websiteInfo,
-        hasData: recent.length > 0,
+        hasData: recentData.length > 0,
         totalReports,
         lastFetch: new Date().toISOString(),
       };
@@ -274,7 +225,7 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
     );
   }
 
-  // Tooltip uses the hour label and site-specific metadata
+  // Tooltip uses the exact timestamp label and site-specific metadata
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const row = payload[0]?.payload;
@@ -300,9 +251,6 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
                     <span className="font-bold ml-1">
                       {typeof entry.value === "number" ? entry.value.toFixed(1) : entry.value}
                     </span>
-                    {siteMetadata?.isSynthetic && (
-                      <span className="text-xs text-amber-600 ml-2">(synced)</span>
-                    )}
                   </div>
                   {siteMetadata && (
                     <>
@@ -337,7 +285,14 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>SEO Performance Trend</CardTitle>
+          <CardTitle>
+            SEO Performance Trend
+            {selectedWebsite && selectedWebsite !== "all" && chartData?.websites?.length === 1 && (
+              <span className="text-sm font-normal text-gray-600 ml-2">
+                - {chartData.websites[0].name}
+              </span>
+            )}
+          </CardTitle>
           <button
             onClick={handleRefresh}
             disabled={isFetching}
@@ -382,55 +337,146 @@ export default function PerformanceChart({ stats, isLoading }: PerformanceChartP
 
       <CardContent>
         {chartData?.hasData ? (
-          <ResponsiveContainer width="100%" height={350}>
-            <LineChart
-              data={chartData.data}
-              margin={{ top: 5, right: 30, left: 20, bottom: 25 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              {/* Numeric time axis (per-hour ts) */}
-              <XAxis
-                dataKey="ts"
-                type="number"
-                domain={["dataMin", "dataMax"]}
-                tickFormatter={(v) => formatHourLabel(v as number, TZ)}
-                tick={{ fontSize: 11 }}
-                tickMargin={10}
-              />
-              <YAxis
-                domain={[0, 100]}
-                ticks={[0, 20, 40, 60, 80, 100]}
-                tick={{ fontSize: 12 }}
-                tickMargin={8}
-                label={{
-                  value: "SEO Score",
-                  angle: -90,
-                  position: "insideLeft",
-                  style: { fontSize: 12, fill: "#666" },
-                }}
-              />
-              <Tooltip
-                content={<CustomTooltip />}
-                labelFormatter={(v) => formatHourLabel(v as number, TZ)}
-              />
-              <Legend />
+          <>
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart
+                data={chartData.data}
+                margin={{ top: 5, right: 30, left: 20, bottom: 25 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={(v) => formatTimeLabel(new Date(v), TZ)}
+                  tick={{ fontSize: 11 }}
+                  tickMargin={10}
+                />
+                <YAxis
+                  domain={[0, 100]}
+                  ticks={[0, 20, 40, 60, 80, 100]}
+                  tick={{ fontSize: 12 }}
+                  tickMargin={8}
+                  label={{
+                    value: "SEO Score",
+                    angle: -90,
+                    position: "insideLeft",
+                    style: { fontSize: 12, fill: "#666" },
+                  }}
+                />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  labelFormatter={(v) => formatTimeLabel(new Date(v), TZ)}
+                />
+                <Legend />
 
-              {chartData.websites
-                .filter((site: any) => site.reportCount > 0)
-                .map((site: any) => (
-                  <Line
-                    key={site.id}
-                    type="monotone"
-                    dataKey={site.name}
-                    stroke={site.color}
-                    strokeWidth={2}
-                    dot={{ r: 3, fill: site.color }}
-                    activeDot={{ r: 5 }}
-                    connectNulls
-                  />
-                ))}
-            </LineChart>
-          </ResponsiveContainer>
+                {chartData.websites
+                  .filter((site: any) => site.reportCount > 0)
+                  .map((site: any) => (
+                    <Line
+                      key={site.id}
+                      type="monotone"
+                      dataKey={site.name}
+                      stroke={site.color}
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: site.color }}
+                      activeDot={{ r: 5 }}
+                      connectNulls
+                    />
+                  ))}
+              </LineChart>
+            </ResponsiveContainer>
+            
+            {/* Latest Performance vs Historical Average */}
+            {chartData?.websites && chartData.websites.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Latest Performance */}
+                  <div>
+                    <div className="text-sm text-gray-600 mb-1">
+                      <span className="font-medium">Latest Performance</span>
+                    </div>
+                    <div className="text-2xl font-bold text-gray-900">
+                      {(() => {
+                        const activeWebsites = chartData.websites.filter((s: any) => s.reportCount > 0);
+                        if (activeWebsites.length === 0) return "0.0";
+                        
+                        // For single website, show its latest score
+                        if (activeWebsites.length === 1) {
+                          return activeWebsites[0].latestScore.toFixed(1);
+                        }
+                        
+                        // For multiple websites, show average of latest scores
+                        const avgLatest = activeWebsites.reduce((sum: number, w: any) => 
+                          sum + w.latestScore, 0) / activeWebsites.length;
+                        return avgLatest.toFixed(1);
+                      })()}
+                      <span className="text-sm text-gray-500 ml-1">/ 100</span>
+                    </div>
+                  </div>
+                  
+                  {/* Historical Average */}
+                  <div>
+                    <div className="text-sm text-gray-600 mb-1">
+                      <span className="font-medium">Historical Average</span>
+                      <span className="text-xs text-gray-500 ml-2">
+                        (All-time)
+                      </span>
+                    </div>
+                    <div className="text-2xl font-bold text-gray-900">
+                      {(() => {
+                        const activeWebsites = chartData.websites.filter((s: any) => s.reportCount > 0);
+                        if (activeWebsites.length === 0) return "0.0";
+                        
+                        // Calculate average based on ALL historical scores
+                        let totalScoreSum = 0;
+                        let totalScoreCount = 0;
+                        
+                        for (const website of activeWebsites) {
+                          for (const dataPoint of chartData.data) {
+                            const score = dataPoint[website.name];
+                            if (score !== undefined && score !== null) {
+                              totalScoreSum += score;
+                              totalScoreCount++;
+                            }
+                          }
+                        }
+                        
+                        if (totalScoreCount === 0) return "0.0";
+                        const overallAverage = totalScoreSum / totalScoreCount;
+                        
+                        return overallAverage.toFixed(1);
+                      })()}
+                      <span className="text-sm text-gray-500 ml-1">/ 100</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Show breakdown by website if multiple */}
+                {chartData.websites.filter((s: any) => s.reportCount > 0).length > 1 && (
+                  <div className="mt-3 space-y-1">
+                    <div className="text-xs font-medium text-gray-500 mb-1">Latest scores by website:</div>
+                    {chartData.websites
+                      .filter((s: any) => s.reportCount > 0)
+                      .map((website: any) => (
+                        <div key={website.id} className="flex items-center justify-between text-xs text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: website.color }}
+                            />
+                            <span>{website.name}</span>
+                          </div>
+                          <span className="font-medium">
+                            {website.latestScore.toFixed(1)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <div className="h-[350px] flex items-center justify-center">
             <div className="text-center max-w-md">

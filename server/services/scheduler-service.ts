@@ -2,8 +2,6 @@
 
 import { storage } from "../storage";
 import { wordpressService } from "./wordpress-service";
-
-//nadagdag
 import { autoScheduleService } from "./auto-schedule-service";
 
 export class SchedulerService {
@@ -245,17 +243,14 @@ export class SchedulerService {
 
     // Run immediately
     this.processScheduledContent().catch(console.error);
-    //nadagdag
     autoScheduleService.processAutoSchedules().catch(console.error);
 
     // Then run on interval
     setInterval(() => {
       this.processScheduledContent().catch(console.error);
-      //nadagdag
       autoScheduleService.processAutoSchedules().catch(console.error);
     }, intervalMinutes * 60 * 1000);
 
-    //nadagdag
     // Set up daily cost reset at midnight
     const now = new Date();
     const millisTillMidnight =
@@ -269,7 +264,6 @@ export class SchedulerService {
         0
       ).getTime() - now.getTime();
 
-    //nadagdag
     setTimeout(() => {
       // Reset daily costs at midnight
       autoScheduleService.resetDailyCosts().catch(console.error);
@@ -282,14 +276,11 @@ export class SchedulerService {
       }, 24 * 60 * 60 * 1000);
     }, millisTillMidnight);
 
-    //nadagdag
     // Reset monthly counts if it's the first day of the month
     if (now.getDate() === 1) {
       autoScheduleService.resetMonthlyCounts().catch(console.error);
       console.log("📊 Monthly post counters reset");
     }
-
-    //nadagdag
     // Set up monthly counter reset check
     setInterval(() => {
       const currentDate = new Date();
@@ -305,7 +296,6 @@ export class SchedulerService {
     return this.processScheduledContent();
   }
 
-  //nadagdag
   // Method for manually triggering auto-generation processing (for testing)
   async manualProcessAutoSchedules(): Promise<any> {
     return autoScheduleService.processAutoSchedules();
@@ -314,5 +304,3 @@ export class SchedulerService {
 
 export const schedulerService = new SchedulerService();
 
-// Add this to your main server file (index.ts or app.ts)
-// schedulerService.startScheduler(5); // Check every 5 minutes
