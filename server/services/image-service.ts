@@ -208,7 +208,7 @@ export class ImageService {
         images.push({
           url: imageUrl,
           filename: this.generateFilename(request.topic, i + 1),
-          altText: this.generateAltText(request.topic, i + 1, request.count),
+          altText: this.generateAltTextForAIImage(request.topic, i + 1, request.count),
           prompt: prompt,
           cost: imageCost,
         });
@@ -379,7 +379,7 @@ export class ImageService {
     return `${basePrompt}${guidance} Avoid text overlays, watermarks, or busy backgrounds. Focus on clear, relevant imagery that complements written content.`;
   }
 
-  private generateAltText(
+  private generateAltTextForAIImage(
     topic: string,
     imageNumber: number,
     totalImages: number
@@ -503,6 +503,102 @@ export class ImageService {
       errors,
     };
   }
+
+  async generateAltTextForUpload(
+  imageBuffer: Buffer, 
+  filename: string,
+  userId?: string
+): Promise<string> {
+  try {
+    // Use GPT-4 Vision for actual image analysis
+    const openai = await this.createOpenAIClient(userId);
+    const base64Image = imageBuffer.toString('base64');
+    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+    
+    const response = await openai.chat.completions.create({
+      model: "gpt-4-vision-preview",
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Generate concise, descriptive alt text for this image suitable for web accessibility. Maximum 125 characters."
+          },
+          {
+            type: "image_url",
+            image_url: { url: dataUrl }
+          }
+        ]
+      }],
+      max_tokens: 100
+    });
+    
+    return response.choices[0]?.message?.content || 
+           filename.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+           
+  } catch (error) {
+    console.warn('Failed to generate alt text:', error);
+    // Fallback to filename-based alt text
+    return filename.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+  }
+}
+
+  /**
+   * Optimize uploaded images
+   */
+  async optimizeImage(buffer: Buffer, options: {
+    maxWidth?: number;
+    maxHeight?: number;
+    quality?: number;
+    format?: 'jpeg' | 'png' | 'webp';
+  } = {}): Promise<Buffer> {
+    const sharp = require('sharp');
+    
+    const {
+      maxWidth = 1920,
+      maxHeight = 1080,
+      quality = 85,
+      format = 'jpeg'
+    } = options;
+    
+    try {
+      let pipeline = sharp(buffer);
+      
+      // Get metadata
+      const metadata = await pipeline.metadata();
+      
+      // Resize if needed
+      if (metadata.width > maxWidth || metadata.height > maxHeight) {
+        pipeline = pipeline.resize(maxWidth, maxHeight, {
+          fit: 'inside',
+          withoutEnlargement: true
+        });
+      }
+      
+      // Convert format and compress
+      switch (format) {
+        case 'jpeg':
+          pipeline = pipeline.jpeg({ quality, progressive: true });
+          break;
+        case 'png':
+          pipeline = pipeline.png({ quality, compressionLevel: 9 });
+          break;
+        case 'webp':
+          pipeline = pipeline.webp({ quality });
+          break;
+      }
+      
+      // Remove metadata for privacy
+      pipeline = pipeline.rotate(); // Auto-rotate based on EXIF
+      
+      return await pipeline.toBuffer();
+      
+    } catch (error) {
+      console.error('Image optimization failed:', error);
+      return buffer; // Return original if optimization fails
+    }
+  }
+
 }
 
 export const imageService = new ImageService();

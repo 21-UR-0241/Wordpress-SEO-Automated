@@ -702,6 +702,74 @@ getSchedulingDashboard: async () => {
   }
 },
 
+// In your api object, temporarily replace uploadImages:
+uploadImages: async (files, websiteId, contentId) => {
+  console.log("Mock upload - files:", files);
+  
+  // Simulate upload delay
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  // Create mock response with data URLs for immediate display
+  const mockImages = await Promise.all(
+    Array.from(files).map(async (file, index) => {
+      // Read file as data URL for preview
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+      
+      return {
+        id: `temp_${Date.now()}_${index}`,
+        url: dataUrl,
+        altText: file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " "),
+        filename: file.name,
+        size: file.size
+      };
+    })
+  );
+  
+  return { 
+    success: true,
+    images: mockImages,
+    message: "Mock upload - implement backend endpoint"
+  };
+},
+
+getUserImages: (filters?: {
+  websiteId?: string;
+  contentId?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const params = new URLSearchParams();
+  if (filters?.websiteId) params.append('websiteId', filters.websiteId);
+  if (filters?.contentId) params.append('contentId', filters.contentId);
+  if (filters?.limit) params.append('limit', filters.limit.toString());
+  if (filters?.offset) params.append('offset', filters.offset.toString());
+  
+  return fetch(`/api/user/content/images?${params}`).then(res => {
+    if (!res.ok) throw new Error('Failed to fetch images');
+    return res.json();
+  });
+},
+
+replaceContentImage: (contentId: string, oldImageUrl: string, newImageUrl: string, newAltText: string) => {
+  return fetch('/api/user/content/replace-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contentId,
+      oldImageUrl,
+      newImageUrl,
+      newAltText
+    })
+  }).then(res => {
+    if (!res.ok) throw new Error('Failed to replace image');
+    return res.json();
+  });
+}
+
 
 
 };

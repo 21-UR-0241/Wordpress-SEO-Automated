@@ -416,96 +416,130 @@ private async storeTrackedIssues(
 
   console.log(`Tracking ${issues.length} SEO issues for website ${websiteId}`);
 
-  // CRITICAL FIX: Get ALL existing tracked issues, including 'fixing' status
+  // Get ALL existing tracked issues, including fixed ones
   const existingTrackedIssues = await storage.getTrackedSeoIssues(websiteId, userId, {
-    status: ['fixed', 'resolved', 'fixing'], // ADD 'fixing' here
-    limit: 100
+    // Get all statuses to properly handle reappearing issues
+    limit: 500
   });
 
-   const AI_FIXABLE_TYPES = [
-    // Title issues
+  const AI_FIXABLE_TYPES = [
     'missing page title',
     'title tag too long', 
     'title tag too short',
-    // Meta description issues
     'missing meta description',
     'meta description too long',
-    // Heading issues
     'missing h1 tag',
     'multiple h1 tags', 
     'improper heading hierarchy',
-    // Image issues
     'images missing alt text',
-    // Content quality issues
     'low content quality',
     'poor readability',
     'poor content structure',
-    // Technical SEO issues (newly fixable)
     'missing viewport meta tag',
     'missing schema markup',
     'missing open graph tags',
-    // Keyword optimization issues (newly fixable)
     'poor keyword distribution',
     'keyword over-optimization',
     'missing important keywords',
-    'poor content structure',
-  'content structure',
   ];
 
   try {
+    const currentIssueTypes = new Set<string>();
+    
     for (const issue of issues) {
       try {
         const issueType = this.mapIssueToTrackingType(issue.title);
+        currentIssueTypes.add(issueType);
         
-        // Check existing issue status
+        // Find if this issue was previously tracked
         const existingIssue = existingTrackedIssues.find(existing => 
           existing.issueType === issueType || 
-          existing.issueTitle.toLowerCase().includes(issue.title.toLowerCase().substring(0, 30))
+          this.isSameIssue(existing, issue)
         );
 
         if (existingIssue) {
-          // Handle different statuses appropriately
-          if (existingIssue.status === 'fixing') {
-            console.log(`Issue "${issue.title}" is currently being fixed - resetting to detected`);
-            // Reset stuck "fixing" status
-            await storage.updateSeoIssueStatus(existingIssue.id, 'detected', {
-              resolutionNotes: 'Reset from fixing status during new analysis'
-            });
-          } else if (['fixed', 'resolved'].includes(existingIssue.status)) {
-            console.log(`Issue "${issue.title}" was previously fixed - marking as reappeared`);
-            // Don't skip, but mark as reappeared
+          // Issue exists - check its status
+          if (existingIssue.status === 'fixed' || existingIssue.status === 'resolved') {
+            // Issue was previously fixed but is detected again
+            console.log(`Issue "${issue.title}" reappeared after being ${existingIssue.status}`);
+            
             await storage.updateSeoIssueStatus(existingIssue.id, 'reappeared', {
-              resolutionNotes: 'Issue detected again after being fixed'
+              resolutionNotes: 'Issue detected again in new analysis',
+              previousStatus: existingIssue.status,
+              reappearedAt: new Date().toISOString(),
+              lastSeenAt: new Date().toISOString()
+            });
+          } else if (existingIssue.status === 'fixing') {
+            // Reset stuck fixing status
+            console.log(`Resetting stuck "fixing" issue: ${issue.title}`);
+            
+            await storage.updateSeoIssueStatus(existingIssue.id, 'detected', {
+              resolutionNotes: 'Reset from stuck fixing status during new analysis',
+              lastSeenAt: new Date().toISOString()
+            });
+          } else if (existingIssue.status === 'detected' || existingIssue.status === 'reappeared') {
+            // Update last seen timestamp
+            await storage.updateSeoIssueStatus(existingIssue.id, existingIssue.status, {
+              lastSeenAt: new Date().toISOString()
             });
           }
+        } else {
+          // New issue - create it
+          const isAutoFixable = AI_FIXABLE_TYPES.some(type => 
+            issue.title.toLowerCase().includes(type.toLowerCase())
+          ) || issue.autoFixAvailable === true;
+
+          await storage.createSeoIssue({
+            userId,
+            websiteId,
+            seoReportId,
+            issueType,
+            issueTitle: issue.title,
+            issueDescription: issue.description,
+            severity: issue.type as 'critical' | 'warning' | 'info',
+            autoFixAvailable: isAutoFixable,
+            status: 'detected',
+            elementPath: this.generateElementPath(issue.title),
+            currentValue: this.extractCurrentValue(issue.title, issue.description),
+            recommendedValue: this.generateRecommendedValue(issue.title, issue.description),
+            detectedAt: new Date().toISOString(),
+            lastSeenAt: new Date().toISOString()
+          });
+          
+          console.log(`Created new tracked issue: ${issue.title}`);
         }
-
-        const isAutoFixable = AI_FIXABLE_TYPES.some(type => 
-          issue.title.toLowerCase().includes(type.toLowerCase())
-        ) || issue.autoFixAvailable === true;
-
-
-        // Create or update the tracked issue
-        await storage.createOrUpdateSeoIssue({
-          userId,
-          websiteId,
-          seoReportId,
-          issueType,
-          issueTitle: issue.title,
-          issueDescription: issue.description,
-          severity: issue.type as 'critical' | 'warning' | 'info',
-          autoFixAvailable: isAutoFixable,
-          elementPath: this.generateElementPath(issue.title),
-          currentValue: this.extractCurrentValue(issue.title, issue.description),
-          recommendedValue: this.generateRecommendedValue(issue.title, issue.description)
-        });
       } catch (issueError) {
         console.error(`Failed to track individual issue "${issue.title}":`, issueError);
       }
     }
 
-    const currentIssueTypes = issues.map(issue => this.mapIssueToTrackingType(issue.title));
-    await storage.markIssuesAsResolved(websiteId, userId, currentIssueTypes);
+    // Mark issues as resolved if they're no longer detected
+    // But ONLY if they were previously 'detected' or 'reappeared', not 'fixed'
+    const issuesToResolve = existingTrackedIssues.filter(existing => {
+      // Only auto-resolve issues that were detected/reappeared, not manually fixed
+      if (!['detected', 'reappeared'].includes(existing.status)) {
+        return false;
+      }
+      // Check if this issue type is no longer in current issues
+      return !currentIssueTypes.has(existing.issueType);
+    });
+
+    for (const issueToResolve of issuesToResolve) {
+      await storage.updateSeoIssueStatus(issueToResolve.id, 'resolved', {
+        resolutionNotes: 'Issue no longer detected in latest analysis',
+        resolvedAutomatically: true,
+        resolvedAt: new Date().toISOString()
+      });
+      console.log(`Auto-resolved issue: ${issueToResolve.issueTitle}`);
+    }
+
+    // Important: Don't change 'fixed' issues to 'resolved' automatically
+    // They should stay as 'fixed' to show they were addressed by AI
+    const fixedIssues = existingTrackedIssues.filter(existing => 
+      existing.status === 'fixed' && !currentIssueTypes.has(existing.issueType)
+    );
+    
+    console.log(`${fixedIssues.length} issues remain marked as 'fixed' (not in current analysis)`);
 
     console.log(`Successfully processed ${issues.length} issues for tracking`);
   } catch (error) {
@@ -513,9 +547,29 @@ private async storeTrackedIssues(
   }
 }
 
-/**
- * Map issue title to consistent tracking type
- */
+private isSameIssue(tracked: any, reported: SEOIssue): boolean {
+  // More sophisticated issue matching
+  const trackedTitle = tracked.issueTitle.toLowerCase();
+  const reportedTitle = reported.title.toLowerCase();
+  
+  // Exact match
+  if (trackedTitle === reportedTitle) return true;
+  
+  // Partial match for key terms
+  const keyTerms = [
+    'meta description', 'title tag', 'h1', 'alt text',
+    'viewport', 'schema', 'content quality', 'readability'
+  ];
+  
+  for (const term of keyTerms) {
+    if (trackedTitle.includes(term) && reportedTitle.includes(term)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 private mapIssueToTrackingType(title: string): string {
   const titleLower = title.toLowerCase();
 
@@ -531,12 +585,13 @@ private mapIssueToTrackingType(title: string): string {
   if (titleLower.includes("e-a-t")) return "low_eat_score";
   if (titleLower.includes("keyword")) return "keyword_optimization";
   if (titleLower.includes("open graph")) return "missing_og_tags";
-
   if (titleLower.includes("user intent")) return "poor_user_intent";
   if (titleLower.includes("content uniqueness") || titleLower.includes("uniqueness")) return "low_content_uniqueness";
-  if (titleLower.includes("content structure")) return "poor_content_structure"
+  if (titleLower.includes("content structure")) return "poor_content_structure";
+  
   return "other";
 }
+
 
 /**
  * Generate element path for issue tracking

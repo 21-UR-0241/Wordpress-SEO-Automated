@@ -155,24 +155,27 @@ export default function Header() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Fetch data for searching
-  const { data: websites } = useQuery({
-    queryKey: ["/api/user/websites"],
-    queryFn: api.getWebsites,
-    staleTime: 5 * 60 * 1000,
-  });
+const { data: websites } = useQuery({
+  queryKey: ["/api/user/websites"],
+  queryFn: () => api.getWebsites(), // Add arrow function wrapper for consistency
+  staleTime: 5 * 60 * 1000,
+});
 
-  const { data: reports } = useQuery({
-    queryKey: ["/api/user/reports"],
-    queryFn: api.getClientReports,
-    staleTime: 5 * 60 * 1000,
-  });
+const { data: reports } = useQuery({
+  queryKey: ["/api/user/reports"],
+  queryFn: () => api.getClientReports(), // Fixed: arrow function wrapper
+  staleTime: 5 * 60 * 1000,
+});
 
-  const { data: posts } = useQuery({
-    queryKey: ["/api/user/posts"],
-    queryFn: api.getPosts,
-    staleTime: 5 * 60 * 1000,
-  });
-
+const { data: posts } = useQuery({
+  queryKey: ["/api/user/posts"],
+  queryFn: async () => {  // Fixed: inline function since getPosts doesn't exist
+    const response = await fetch("/api/user/posts");
+    if (!response.ok) throw new Error("Failed to fetch posts");
+    return response.json();
+  },
+  staleTime: 5 * 60 * 1000,
+});
   // Get entity ID for activity logs
   const getEntityId = () => {
     if (!selectedResult) return undefined;
